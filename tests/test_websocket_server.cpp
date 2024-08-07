@@ -65,7 +65,8 @@ template<typename test_websocket_stream>
 test_websocket_server<test_websocket_stream>::test_websocket_server(boost::asio::ip::address const &testAddress) :
    m_ioContext(1),
    m_acceptor(m_ioContext, {testAddress, 0}),
-   m_buffer(1024),
+   m_inboundBuffer(1024),
+   m_outboundBuffer(),
    m_streams(),
    m_thread()
 {
@@ -91,9 +92,9 @@ uint16_t test_websocket_server<test_websocket_stream>::local_port() const
 template<typename test_websocket_stream>
 void test_websocket_server<test_websocket_stream>::async_read(test_websocket_stream &stream)
 {
-   m_buffer.clear();
+   m_inboundBuffer.clear();
    stream.async_read(
-      m_buffer,
+      m_inboundBuffer,
       [&] (auto testErrorCode, auto const)
       {
          if (boost::beast::websocket::error::closed == testErrorCode)
@@ -101,7 +102,8 @@ void test_websocket_server<test_websocket_stream>::async_read(test_websocket_str
             return;
          }
          EXPECT_ERROR_CODE(testErrorCode);
-         if ((false == testErrorCode.failed()) && (true == handle_message(m_buffer)))
+         m_outboundBuffer.clear();
+         if ((false == testErrorCode.failed()) && (true == handle_message(m_inboundBuffer, m_outboundBuffer)))
          {
             async_write(stream);
          }
@@ -165,7 +167,7 @@ void test_websocket_server<test_websocket_stream>::async_socket_accept()
          }
          else
          {
-            testTcpSocket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, testErrorCode);
+            testTcpSocket.close(testErrorCode);
             EXPECT_ERROR_CODE(testErrorCode);
          }
          async_socket_accept();
@@ -207,7 +209,7 @@ void test_websocket_server<test_websocket_stream>::async_write(test_websocket_st
 {
    stream.text(stream.got_text());
    stream.async_write(
-      m_buffer.data(),
+      boost::asio::buffer(static_cast<std::string const &>(m_outboundBuffer)),
       [&](auto testErrorCode, auto const)
       {
          EXPECT_ERROR_CODE(testErrorCode);

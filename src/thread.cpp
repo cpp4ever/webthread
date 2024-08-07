@@ -191,6 +191,7 @@ struct [[nodiscard("discarded-value expression detected")]] socket_context final
       socketContext.freeSocketEvents = socketEvent->next;
       socketEvent->next = nullptr;
       socketEvent->ev = {};
+      socketEvent->ev.ev_base = nullptr;
       return socketEvent;
    }
 #if (not defined(NDEBUG))
@@ -201,7 +202,10 @@ struct [[nodiscard("discarded-value expression detected")]] socket_context final
 
 void release_socket_event(socket_context &socketContext, socket_event &socketEvent)
 {
-   EXPECT_ERROR_CODE(0, event_del(std::addressof(socketEvent.ev)));
+   if (nullptr != socketEvent.ev.ev_base)
+   {
+      EXPECT_ERROR_CODE(0, event_del(std::addressof(socketEvent.ev)));
+   }
    socketEvent.ev.~event();
    socketEvent.next = socketContext.freeSocketEvents;
    socketContext.freeSocketEvents = std::addressof(socketEvent);
@@ -321,8 +325,9 @@ private:
       assert(nullptr != socketContext.multiHandle);
       int messagesInQueue = 0;
       CURLMsg *message = nullptr;
-      while ((nullptr != (message = curl_multi_info_read(socketContext.multiHandle, std::addressof(messagesInQueue)))) && (CURLMSG_DONE == message->msg))
+      while (nullptr != (message = curl_multi_info_read(socketContext.multiHandle, std::addressof(messagesInQueue))))
       {
+         assert(CURLMSG_DONE == message->msg);
          assert(nullptr != message->easy_handle);
          connection *self = nullptr;
          EXPECT_ERROR_CODE(CURLE_OK, curl_easy_getinfo(message->easy_handle, CURLINFO_PRIVATE, std::addressof(self)));
@@ -1528,6 +1533,9 @@ thread::rest_request thread::rest_client::upload_request() const noexcept
 
 class [[nodiscard("discarded-value expression detected")]] thread::websocket_connection final : public thread::connection
 {
+private:
+   static constexpr curl_socket_t invalid_socket = static_cast<curl_socket_t>(-1);
+
 public:
    websocket_connection() = delete;
    websocket_connection(websocket_connection &&) = delete;
@@ -1581,6 +1589,7 @@ public:
       assert(nullptr != m_handle);
       if (
          (true == m_config->apply(m_handle, [this] (auto const errorCode) { return report_error(errorCode); })) &&
+         (connection_status::initializing == report_error(curl_easy_setopt(m_handle, CURLOPT_VERBOSE, 1L))) &&
          (connection_status::initializing == report_error(curl_easy_setopt(m_handle, CURLOPT_CONNECT_ONLY, 2L))) &&
          (connection_status::initializing == report_error(curl_easy_setopt(m_handle, CURLOPT_PRIVATE, this))) &&
          (connection_status::initializing == report_error(curl_easy_setopt(m_handle, CURLOPT_REQUEST_TARGET, m_urlPath.c_str()))) &&
@@ -1597,6 +1606,7 @@ public:
       assert(nullptr != socketContext.multiHandle);
       assert((nullptr == m_multiHandle) || (m_multiHandle == socketContext.multiHandle));
       assert((nullptr == m_multiHandle) == (nullptr == m_handle));
+      assert(connection_status::busy != m_status);
       if (connection_status::ready == m_status) [[likely]]
       {
          assert(nullptr != m_handle);
@@ -1613,18 +1623,10 @@ public:
             m_outboundMessage.clear();
             event_assign_callback(socketContext.eventBase, EV_WRITE);
          }
-         else
-         {
-            unregister_handle(socketContext);
-         }
       }
-      else
+      else if (connection_status::initializing == m_status)
       {
-         assert(connection_status::busy != m_status);
-         if (connection_status::initializing == m_status)
-         {
-            m_outboundMessageReady = true;
-         }
+         m_outboundMessageReady = true;
       }
    }
 
@@ -1646,10 +1648,8 @@ public:
       assert((nullptr != m_handle) || (connection_status::ready != m_status));
       if (nullptr != m_socketEvent)
       {
-         assert(0 != m_socket);
          release_socket_event(socketContext, *m_socketEvent);
          m_socketEvent = nullptr;
-         m_socket = 0;
       }
       if (nullptr != m_handle)
       {
@@ -1667,7 +1667,7 @@ private:
    std::string m_outboundMessage = {};
    std::pair<char *, size_t> m_inboundMessageBuffer;
    socket_event *m_socketEvent = nullptr;
-   curl_socket_t m_socket = 0;
+   curl_socket_t m_socket = invalid_socket;
    connection_status m_status = connection_status::initializing;
    bool m_outboundMessageReady = false;
 
@@ -1676,10 +1676,11 @@ private:
       /// context: worker thread
       assert(nullptr != m_multiHandle);
       assert(nullptr != m_handle);
-      if (nullptr != m_socketEvent)
+      if ((nullptr != m_socketEvent) && (nullptr != m_socketEvent->ev.ev_base))
       {
-         assert(0 != m_socket);
+         assert(invalid_socket != m_socket);
          EXPECT_ERROR_CODE(0, event_del(std::addressof(m_socketEvent->ev)));
+         m_socket = invalid_socket;
       }
       EXPECT_ERROR_CODE(CURLM_OK, curl_multi_remove_handle(m_multiHandle, m_handle));
       m_multiHandle = nullptr;
@@ -1692,15 +1693,15 @@ private:
 
    void on_attach_socket(curl_socket_t const socket) override
    {
-      assert(0 != socket);
-      assert((0 == m_socket) || (socket == m_socket));
+      assert(invalid_socket != socket);
+      assert((invalid_socket == m_socket) || (socket == m_socket));
       m_socket = socket;
    }
 
    void on_detach_socket([[maybe_unused]] curl_socket_t const socket) override
    {
-      assert(0 != socket);
-      assert((0 == m_socket) || (socket == m_socket));
+      assert(invalid_socket != socket);
+      assert((invalid_socket == m_socket) || (socket == m_socket));
    }
 
    void on_recv_message(socket_context &socketContext, CURLMsg const &message) override
@@ -1709,11 +1710,12 @@ private:
       assert(nullptr != socketContext.multiHandle);
       assert(nullptr != message.easy_handle);
       assert(message.easy_handle == m_handle);
+      assert(invalid_socket != m_socket);
       assert(connection_status::inactive != m_status);
       if (connection_status::initializing == report_error(message.data.result))
       {
          assert(nullptr == m_socketEvent);
-         assert(0 != m_socket);
+         assert(invalid_socket != m_socket);
          m_socketEvent = acquire_socket_event(socketContext);
          assert(nullptr != m_socketEvent);
          m_status = connection_status::ready;
@@ -1761,7 +1763,8 @@ private:
    void event_assign_callback(event_base &eventBase, short const additionalSocketEventKind)
    {
       assert(nullptr != m_socketEvent);
-      assert(0 != m_socket);
+      assert(invalid_socket != m_socket);
+      assert(connection_status::inactive != m_status);
       EXPECT_ERROR_CODE(
          0,
          event_assign(
@@ -1781,12 +1784,17 @@ private:
       assert(nullptr != userdata);
       auto &self = *static_cast<websocket_connection *>(userdata);
       assert(socket == static_cast<evutil_socket_t>(self.m_socket));
+      assert(connection_status::initializing != self.m_status);
+      assert(connection_status::inactive != self.m_status);
+#if (not defined(NDEBUG))
+      auto raiseEvent = false;
+#endif
       if (EV_READ == (socketEventKind & EV_READ))
       {
          size_t recvBytes = 0;
          curl_ws_frame const *wsMeta = nullptr;
          if (
-            auto const connectionStatus = self.report_error(
+            connection_status::inactive != self.report_error(
                curl_ws_recv(
                   self.m_handle,
                   self.m_inboundMessageBuffer.first,
@@ -1794,27 +1802,30 @@ private:
                   std::addressof(recvBytes),
                   std::addressof(wsMeta)
                )
-            );
-            connection_status::inactive == connectionStatus
-         )
+            )
+         ) [[likely]]
          {
-            return;
+            self.m_listener->on_message_recv(std::string_view{self.m_inboundMessageBuffer.first, recvBytes});
+#if (not defined(NDEBUG))
+            raiseEvent = true;
+#endif
          }
          else
          {
-            self.m_listener->on_message_recv(std::string_view{self.m_inboundMessageBuffer.first, recvBytes});
+            return;
          }
       }
       if (EV_WRITE == (socketEventKind & EV_WRITE))
       {
          assert(connection_status::busy == self.m_status);
-         if (connection_status::busy == self.m_status)
-         {
-            self.m_status = connection_status::ready;
-            self.m_listener->on_message_sent();
-            self.event_assign_callback(*self.m_socketEvent->ev.ev_base, 0);
-         }
+         self.m_status = connection_status::ready;
+         self.m_listener->on_message_sent();
+#if (not defined(NDEBUG))
+         raiseEvent = true;
+#endif
       }
+      assert(true == raiseEvent);
+      self.event_assign_callback(*self.m_socketEvent->ev.ev_base, 0);
    }
 };
 

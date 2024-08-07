@@ -55,13 +55,14 @@ public:
    MOCK_METHOD(bool, should_accept_socket, (), ());
    MOCK_METHOD(bool, should_pass_handshake, (), ());
    MOCK_METHOD(bool, should_accept_websocket, (), ());
-   MOCK_METHOD(bool, handle_message, (boost::beast::flat_buffer &buffer), ());
+   MOCK_METHOD(bool, handle_message, (boost::beast::flat_buffer const &inboundBuffer, std::string &outboundBuffer), ());
    MOCK_METHOD(bool, should_keep_alive, (), ());
 
 private:
    boost::asio::io_context m_ioContext;
    boost::asio::ip::tcp::acceptor m_acceptor;
-   boost::beast::flat_buffer m_buffer;
+   boost::beast::flat_buffer m_inboundBuffer;
+   std::string m_outboundBuffer;
    std::deque<test_websocket_stream> m_streams;
    std::unique_ptr<std::thread> m_thread;
 

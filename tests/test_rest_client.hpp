@@ -72,9 +72,12 @@ void test_rest_client()
       auto testRestClientListener = std::make_shared<testing::StrictMock<test_rest_client_listener>>();
       EXPECT_CALL(*testRestClientListener, on_error(testing::_, testing::_))
          .WillOnce(
-            [&] (auto const testErrorCode, auto const)
+            [&] (auto const testErrorCode, auto const testErrorDescription)
             {
-               EXPECT_THAT(testErrorCode, testing::AnyOf(CURLE_COULDNT_RESOLVE_HOST, CURLE_OPERATION_TIMEDOUT)) << testNonRoutableIp;
+               EXPECT_THAT(testErrorCode, testing::AnyOf(CURLE_COULDNT_RESOLVE_HOST, CURLE_OPERATION_TIMEDOUT))
+                  << testNonRoutableIp
+                  << ": " << testErrorDescription
+               ;
                testLock.store(true, std::memory_order_release);
             }
          )
@@ -101,9 +104,9 @@ void test_rest_client()
       auto testRestClientListener = std::make_shared<testing::StrictMock<test_rest_client_listener>>();
       EXPECT_CALL(*testRestClientListener, on_error(testing::_, testing::_))
          .WillOnce(
-            [&] (auto const testErrorCode, auto const)
+            [&] (auto const testErrorCode, auto const testErrorDescription)
             {
-               EXPECT_THAT(testErrorCode, testErrorCodeMatcher);
+               EXPECT_THAT(testErrorCode, testErrorCodeMatcher) << testErrorDescription;
                testLock.store(true, std::memory_order_release);
             }
          )
@@ -124,9 +127,9 @@ void test_rest_client()
       auto testRestClientListener = std::make_shared<testing::StrictMock<test_rest_client_listener>>();
       EXPECT_CALL(*testRestClientListener, on_error(testing::_, testing::_))
          .WillOnce(
-            [&] (auto const testErrorCode, auto const)
+            [&] (auto const testErrorCode, auto const testErrorDescription)
             {
-               EXPECT_THAT(testErrorCode, testErrorCodeMatcher);
+               EXPECT_THAT(testErrorCode, testErrorCodeMatcher) << testErrorDescription;
                testLock.store(true, std::memory_order_release);
             }
          )
@@ -161,9 +164,9 @@ void test_rest_client()
       auto testRestClientListener = std::make_shared<testing::StrictMock<test_rest_client_listener>>();
       EXPECT_CALL(*testRestClientListener, on_error(testing::_, testing::_))
          .WillOnce(
-            [&] (auto const testErrorCode, auto const)
+            [&] (auto const testErrorCode, auto const testErrorDescription)
             {
-               EXPECT_THAT(testErrorCode, testErrorCodeMatcher);
+               EXPECT_THAT(testErrorCode, testErrorCodeMatcher) << testErrorDescription;
                testLock.store(true, std::memory_order_release);
             }
          )
@@ -223,9 +226,9 @@ void test_rest_client()
                EXPECT_CALL(testRestServer, should_accept_socket()).WillOnce(testing::Return(false));
                EXPECT_CALL(*testRestClientListener, on_error(testing::_, testing::_))
                   .WillOnce(
-                     [&] (auto const testErrorCode, auto const)
+                     [&] (auto const testErrorCode, auto const testErrorDescription)
                      {
-                        EXPECT_THAT(testErrorCode, testErrorCodeMatcher);
+                        EXPECT_THAT(testErrorCode, testErrorCodeMatcher) << testErrorDescription;
                         testLock.store(true, std::memory_order_release);
                      }
                   )

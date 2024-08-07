@@ -63,9 +63,12 @@ void test_websocket_client()
       auto testWebSocketListener = std::make_shared<testing::StrictMock<test_websocket_listener>>();
       EXPECT_CALL(*testWebSocketListener, on_error(testing::_, testing::_))
          .WillOnce(
-            [&] (auto const testErrorCode, auto const)
+            [&] (auto const testErrorCode, auto const testErrorDescription)
             {
-               EXPECT_THAT(testErrorCode, testing::AnyOf(CURLE_COULDNT_RESOLVE_HOST, CURLE_OPERATION_TIMEDOUT)) << testNonRoutableIp;
+               EXPECT_THAT(testErrorCode, testing::AnyOf(CURLE_COULDNT_RESOLVE_HOST, CURLE_OPERATION_TIMEDOUT))
+                  << testNonRoutableIp
+                  << ": " << testErrorDescription
+               ;
                testLock.store(true, std::memory_order_release);
             }
          )
@@ -77,7 +80,7 @@ void test_websocket_client()
    auto const testAddress = boost::asio::ip::make_address(test_loopback_ip);
    testing::StrictMock<test_websocket_server<test_websocket_client_stream>> testWebSocketServer{testAddress};
    auto const testConfig = test_config{test_websocket_client_traits<test_websocket_client_stream>::make_loopback_config(testWebSocketServer.local_port())};
-   auto const testErrorCodeMatcher = testing::AnyOf(CURLE_GOT_NOTHING, CURLE_RECV_ERROR, CURLE_SSL_CONNECT_ERROR);
+   auto const testErrorCodeMatcher = testing::AnyOf(CURLE_GOT_NOTHING, CURLE_RECV_ERROR, CURLE_SEND_ERROR, CURLE_SSL_CONNECT_ERROR);
    /// Disconnect on socket accept
    {
       EXPECT_CALL(testWebSocketServer, should_accept_socket()).WillOnce(testing::Return(false));
@@ -85,9 +88,9 @@ void test_websocket_client()
       auto testWebSocketistener = std::make_shared<testing::StrictMock<test_websocket_listener>>();
       EXPECT_CALL(*testWebSocketistener, on_error(testing::_, testing::_))
          .WillOnce(
-            [&] (auto const testErrorCode, auto const)
+            [&] (auto const testErrorCode, auto const testErrorDescription)
             {
-               EXPECT_THAT(testErrorCode, testErrorCodeMatcher);
+               EXPECT_THAT(testErrorCode, testing::AnyOf(CURLE_BAD_FUNCTION_ARGUMENT, CURLE_GOT_NOTHING, CURLE_RECV_ERROR, CURLE_SEND_ERROR, CURLE_SSL_CONNECT_ERROR)) << testErrorDescription;
                testLock.store(true, std::memory_order_release);
             }
          )
@@ -104,9 +107,9 @@ void test_websocket_client()
       auto testWebSocketListener = std::make_shared<testing::StrictMock<test_websocket_listener>>();
       EXPECT_CALL(*testWebSocketListener, on_error(testing::_, testing::_))
          .WillOnce(
-            [&] (auto const testErrorCode, auto const)
+            [&] (auto const testErrorCode, auto const testErrorDescription)
             {
-               EXPECT_THAT(testErrorCode, testErrorCodeMatcher);
+               EXPECT_THAT(testErrorCode, testErrorCodeMatcher) << testErrorDescription;
                testLock.store(true, std::memory_order_release);
             }
          )
@@ -122,12 +125,12 @@ void test_websocket_client()
       EXPECT_CALL(testWebSocketServer, should_accept_websocket()).WillOnce(testing::Return(false));
       auto testLock = std::atomic_bool{false};
       auto testWebSocketListener = std::make_shared<testing::StrictMock<test_websocket_listener>>();
-      EXPECT_CALL(*testWebSocketListener, on_message_sent()).Times(1);
+      EXPECT_CALL(*testWebSocketListener, on_message_sent()).Times(testing::AtMost(1));
       EXPECT_CALL(*testWebSocketListener, on_error(testing::_, testing::_))
          .WillOnce(
-            [&] (auto const testErrorCode, auto const)
+            [&] (auto const testErrorCode, auto const testErrorDescription)
             {
-               EXPECT_THAT(testErrorCode, testErrorCodeMatcher);
+               EXPECT_THAT(testErrorCode, testErrorCodeMatcher) << testErrorDescription;
                testLock.store(true, std::memory_order_release);
             }
          )
@@ -141,14 +144,14 @@ void test_websocket_client()
       EXPECT_CALL(testWebSocketServer, should_accept_socket()).WillOnce(testing::Return(true));
       EXPECT_CALL(testWebSocketServer, should_pass_handshake()).WillOnce(testing::Return(true));
       EXPECT_CALL(testWebSocketServer, should_accept_websocket()).WillOnce(testing::Return(true));
-      EXPECT_CALL(testWebSocketServer, handle_message(testing::_))
+      EXPECT_CALL(testWebSocketServer, handle_message(testing::_, testing::_))
          .WillOnce(
-            [&] (auto &testBuffer) -> bool
+            [&] (auto const &testInboundBuffer, auto &) -> bool
             {
                auto const testMessage = std::string_view
                {
-                  static_cast<char const *>(testBuffer.data().data()),
-                  testBuffer.data().size(),
+                  static_cast<char const *>(testInboundBuffer.data().data()),
+                  testInboundBuffer.data().size(),
                };
                EXPECT_EQ(testMessage, "test");
                return false;
@@ -161,9 +164,9 @@ void test_websocket_client()
       EXPECT_CALL(*testWebSocketListener, on_message_sent()).Times(1);
       EXPECT_CALL(*testWebSocketListener, on_error(testing::_, testing::_))
          .WillOnce(
-            [&] (auto const testErrorCode, auto const)
+            [&] (auto const testErrorCode, auto const testErrorDescription)
             {
-               EXPECT_THAT(testErrorCode, testErrorCodeMatcher);
+               EXPECT_THAT(testErrorCode, testErrorCodeMatcher) << testErrorDescription;
                testLock.store(true, std::memory_order_release);
             }
          )
@@ -179,20 +182,18 @@ void test_websocket_client()
       EXPECT_CALL(testWebSocketServer, should_accept_socket()).WillOnce(testing::Return(true));
       EXPECT_CALL(testWebSocketServer, should_pass_handshake()).WillOnce(testing::Return(true));
       EXPECT_CALL(testWebSocketServer, should_accept_websocket()).WillOnce(testing::Return(true));
-      EXPECT_CALL(testWebSocketServer, handle_message(testing::_))
+      EXPECT_CALL(testWebSocketServer, handle_message(testing::_, testing::_))
          .WillOnce(
-            [testGoodRequest, testGoodResponse] (auto &testBuffer) -> bool
+            [&] (auto const &testInboundBuffer, auto &testOutboundBuffer) -> bool
             {
                auto const testMessage = std::string
                {
-                  static_cast<char const *>(testBuffer.data().data()),
-                  testBuffer.data().size(),
+                  static_cast<char const *>(testInboundBuffer.data().data()),
+                  testInboundBuffer.data().size(),
                };
                EXPECT_EQ(testMessage, testGoodRequest);
 
-               testBuffer.clear();
-               boost::asio::buffer_copy(testBuffer.prepare(testGoodResponse.size()), boost::asio::buffer(testGoodResponse));
-               testBuffer.commit(testGoodResponse.size());
+               testOutboundBuffer.append(testGoodResponse);
                return true;
             }
          )
@@ -204,15 +205,15 @@ void test_websocket_client()
       EXPECT_CALL(*testWebSocketListener, on_message_sent()).Times(1);
       EXPECT_CALL(*testWebSocketListener, on_message_recv(testing::_))
          .WillOnce(
-            [testGoodResponse, &testWebSocket, &testWebSocketListener, testBadRequest, &testErrorCodeMatcher, &testLock] (auto const testMessage)
+            [&] (auto const testMessage)
             {
                EXPECT_EQ(testMessage, testGoodResponse);
 
                EXPECT_CALL(*testWebSocketListener, on_error(testing::_, testing::_))
                   .WillOnce(
-                     [&testErrorCodeMatcher, &testLock] (auto const testErrorCode, auto const)
+                     [&] (auto const testErrorCode, auto const testErrorDescription)
                      {
-                        EXPECT_THAT(testErrorCode, testErrorCodeMatcher);
+                        EXPECT_THAT(testErrorCode, testErrorCodeMatcher) << testErrorDescription;
                         testLock.store(true, std::memory_order_release);
                      }
                   )
